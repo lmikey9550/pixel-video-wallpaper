@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pixel 动态壁纸</string>
+    <string name="wallpaper_description">将任意视频设置为 Pixel 10 动态锁屏与桌面壁纸，省电流畅无黑边</string>
+    <string name="wallpaper_settings">动态壁纸设置</string>
+</resources>
