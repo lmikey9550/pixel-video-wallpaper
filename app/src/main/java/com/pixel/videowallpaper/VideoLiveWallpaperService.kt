@@ -1,5 +1,6 @@
 package com.pixel.videowallpaper
 
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -30,20 +31,41 @@ class VideoLiveWallpaperService : WallpaperService() {
     inner class VideoEngine : Engine() {
         private var mediaPlayer: MediaPlayer? = null
         private lateinit var config: WallpaperConfig
+        private lateinit var keyguardManager: KeyguardManager
         private var isEngineVisible = false
         private var isPrepared = false
+        private var isKeyguardLocked = true
+        private var currentPlayingTarget: VideoTarget? = null
         private var gestureDetector: GestureDetector? = null
 
-        private val configReceiver = object : BroadcastReceiver() {
+        private var keyguardListener: KeyguardManager.KeyguardLockedStateListener? = null
+
+        private val systemEventReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                Log.d(TAG, "Configuration changed broadcast received.")
-                reloadConfigAndApply()
+                when (intent?.action) {
+                    Intent.ACTION_USER_PRESENT -> {
+                        Log.d(TAG, "Device unlocked (ACTION_USER_PRESENT)")
+                        onKeyguardStateChanged(false)
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        Log.d(TAG, "Screen off (ACTION_SCREEN_OFF) -> reset to lock screen state")
+                        onKeyguardStateChanged(true)
+                    }
+                    WallpaperConfig.ACTION_CONFIG_CHANGED -> {
+                        Log.d(TAG, "Configuration changed broadcast received")
+                        reloadCurrentConfig()
+                    }
+                }
             }
         }
 
         override fun onCreate(surfaceHolder: SurfaceHolder?) {
             super.onCreate(surfaceHolder)
             config = WallpaperConfig(applicationContext)
+            keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+
+            // Initial keyguard lock status
+            isKeyguardLocked = keyguardManager.isKeyguardLocked
 
             // Setup double tap gesture detector
             gestureDetector = GestureDetector(applicationContext, object : GestureDetector.SimpleOnGestureListener() {
@@ -53,18 +75,35 @@ class VideoLiveWallpaperService : WallpaperService() {
                 }
             })
 
-            // Register configuration change receiver
-            val filter = IntentFilter(WallpaperConfig.ACTION_CONFIG_CHANGED)
+            // Register keyguard locked state listener on Android 13+ (Pixel 10)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(configReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                keyguardListener = KeyguardManager.KeyguardLockedStateListener { locked ->
+                    Log.d(TAG, "KeyguardLockedStateListener: locked=$locked")
+                    onKeyguardStateChanged(locked)
+                }
+                keyguardListener?.let { listener ->
+                    keyguardManager.addKeyguardLockedStateListener(mainExecutor, listener)
+                }
+            }
+
+            // Register broadcast receiver for lock/unlock and config changes
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_USER_PRESENT)
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(WallpaperConfig.ACTION_CONFIG_CHANGED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(systemEventReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
             } else {
-                registerReceiver(configReceiver, filter)
+                registerReceiver(systemEventReceiver, filter)
             }
         }
 
         override fun onSurfaceCreated(holder: SurfaceHolder) {
             super.onSurfaceCreated(holder)
-            initAndStartPlayer(holder)
+            isKeyguardLocked = keyguardManager.isKeyguardLocked
+            val target = resolveDesiredTarget()
+            initAndStartPlayer(holder, target)
         }
 
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -80,19 +119,36 @@ class VideoLiveWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             super.onVisibilityChanged(visible)
             isEngineVisible = visible
-            mediaPlayer?.let { player ->
-                try {
-                    if (visible) {
+
+            if (visible) {
+                // Check if keyguard state changed while not visible
+                val currentLocked = keyguardManager.isKeyguardLocked
+                if (currentLocked != isKeyguardLocked) {
+                    isKeyguardLocked = currentLocked
+                }
+                val desiredTarget = resolveDesiredTarget()
+                if (desiredTarget != currentPlayingTarget) {
+                    switchVideoTarget(desiredTarget)
+                } else {
+                    mediaPlayer?.let { player ->
                         if (isPrepared && !player.isPlaying) {
-                            player.start()
+                            try {
+                                player.start()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error starting player: ${e.message}")
+                            }
                         }
-                    } else {
+                    }
+                }
+            } else {
+                mediaPlayer?.let { player ->
+                    try {
                         if (player.isPlaying) {
                             player.pause()
                         }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error pausing player: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error handling visibility change: ${e.message}")
                 }
             }
         }
@@ -104,38 +160,65 @@ class VideoLiveWallpaperService : WallpaperService() {
 
         override fun onDestroy() {
             super.onDestroy()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                keyguardListener?.let { listener ->
+                    try {
+                        keyguardManager.removeKeyguardLockedStateListener(listener)
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
+            }
             try {
-                unregisterReceiver(configReceiver)
+                unregisterReceiver(systemEventReceiver)
             } catch (e: Exception) {
-                // Ignore if not registered
+                // Ignore
             }
             releasePlayer()
         }
 
-        private fun initAndStartPlayer(holder: SurfaceHolder?) {
+        private fun resolveDesiredTarget(): VideoTarget {
+            if (config.wallpaperMode == WallpaperMode.UNIFIED) {
+                return VideoTarget.HOME
+            }
+            return if (isKeyguardLocked) {
+                if (config.hasLockVideo()) VideoTarget.LOCK else VideoTarget.HOME
+            } else {
+                VideoTarget.HOME
+            }
+        }
+
+        private fun onKeyguardStateChanged(locked: Boolean) {
+            isKeyguardLocked = locked
+            val desiredTarget = resolveDesiredTarget()
+            if (desiredTarget != currentPlayingTarget) {
+                Log.d(TAG, "Switching video from $currentPlayingTarget to $desiredTarget (isLocked=$locked)")
+                if (isEngineVisible) {
+                    switchVideoTarget(desiredTarget)
+                } else {
+                    // Update target so it starts with correct video when made visible
+                    currentPlayingTarget = null
+                }
+            }
+        }
+
+        private fun initAndStartPlayer(holder: SurfaceHolder?, target: VideoTarget) {
             if (holder == null || holder.surface == null || !holder.surface.isValid) {
                 Log.d(TAG, "Surface is not valid or ready yet.")
                 return
             }
             releasePlayer()
+            currentPlayingTarget = target
             try {
                 mediaPlayer = MediaPlayer().apply {
                     setSurface(holder.surface)
                     isLooping = true
 
-                    // Apply audio volume
                     val volume = if (config.isMuted) 0f else 1f
                     setVolume(volume, volume)
 
-                    // Data source: custom or built-in sample
-                    if (config.hasCustomVideo()) {
-                        val videoFile = File(config.videoPath!!)
-                        setDataSource(videoFile.absolutePath)
-                    } else {
-                        val afd: AssetFileDescriptor = resources.openRawResourceFd(R.raw.sample_wallpaper)
-                        setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                        afd.close()
-                    }
+                    // Bind video data source
+                    bindDataSource(this, target)
 
                     setOnPreparedListener { mp ->
                         isPrepared = true
@@ -155,6 +238,60 @@ class VideoLiveWallpaperService : WallpaperService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize MediaPlayer", e)
             }
+        }
+
+        private fun bindDataSource(player: MediaPlayer, target: VideoTarget) {
+            if (config.hasVideoForTarget(target)) {
+                val path = config.getVideoPathForTarget(target)!!
+                player.setDataSource(File(path).absolutePath)
+            } else if (config.hasHomeVideo()) {
+                val path = config.homeVideoPath!!
+                player.setDataSource(File(path).absolutePath)
+            } else {
+                val afd: AssetFileDescriptor = resources.openRawResourceFd(R.raw.sample_wallpaper)
+                player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            }
+        }
+
+        private fun switchVideoTarget(target: VideoTarget) {
+            val holder = surfaceHolder ?: return
+            if (holder.surface == null || !holder.surface.isValid) return
+
+            currentPlayingTarget = target
+            mediaPlayer?.let { player ->
+                try {
+                    if (player.isPlaying) {
+                        player.stop()
+                    }
+                    player.reset()
+                    player.setSurface(holder.surface)
+                    player.isLooping = true
+                    val volume = if (config.isMuted) 0f else 1f
+                    player.setVolume(volume, volume)
+
+                    bindDataSource(player, target)
+
+                    player.setOnPreparedListener { mp ->
+                        isPrepared = true
+                        applyScalingMode()
+                        if (isEngineVisible) {
+                            mp.start()
+                        }
+                    }
+                    player.prepareAsync()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error switching video target: ${e.message}")
+                    initAndStartPlayer(holder, target)
+                }
+            } ?: run {
+                initAndStartPlayer(holder, target)
+            }
+        }
+
+        private fun reloadCurrentConfig() {
+            val target = resolveDesiredTarget()
+            switchVideoTarget(target)
         }
 
         private fun applyScalingMode() {
@@ -177,11 +314,6 @@ class VideoLiveWallpaperService : WallpaperService() {
                 val volume = if (config.isMuted) 0f else 1f
                 player.setVolume(volume, volume)
             }
-        }
-
-        private fun reloadConfigAndApply() {
-            // Check if player needs to be reinitialized for new data source
-            initAndStartPlayer(surfaceHolder)
         }
 
         private fun handleDoubleTap() {
@@ -222,7 +354,7 @@ class VideoLiveWallpaperService : WallpaperService() {
                     )
                 }
             } catch (e: Exception) {
-                // Ignore haptic feedback failure
+                // Ignore
             }
         }
 

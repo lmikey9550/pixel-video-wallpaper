@@ -41,7 +41,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,30 +66,59 @@ fun PixelWallpaperHomeScreen() {
     val config = remember { WallpaperConfig(context) }
     val scope = rememberCoroutineScope()
 
+    var wallpaperMode by remember { mutableStateOf(config.wallpaperMode) }
+    var previewTarget by remember { mutableStateOf(VideoTarget.LOCK) }
     var scaleMode by remember { mutableStateOf(config.scaleMode) }
     var isMuted by remember { mutableStateOf(config.isMuted) }
     var doubleTapAction by remember { mutableStateOf(config.doubleTapAction) }
-    var hasCustomVideo by remember { mutableStateOf(config.hasCustomVideo()) }
-    var isImporting by remember { mutableStateOf(false) }
+
+    var hasHomeVideo by remember { mutableStateOf(config.hasHomeVideo()) }
+    var hasLockVideo by remember { mutableStateOf(config.hasLockVideo()) }
+
+    var isImportingTarget by remember { mutableStateOf<VideoTarget?>(null) }
     var refreshPreviewTrigger by remember { mutableIntStateOf(0) }
 
-    // Video picker launcher
-    val videoPickerLauncher = rememberLauncherForActivityResult(
+    // Picker for Lock Screen Video
+    val lockVideoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            isImporting = true
+            isImportingTarget = VideoTarget.LOCK
             scope.launch {
                 val success = withContext(Dispatchers.IO) {
-                    config.saveVideoFromUri(uri)
+                    config.saveVideoForTarget(uri, VideoTarget.LOCK)
                 }
-                isImporting = false
+                isImportingTarget = null
                 if (success) {
-                    hasCustomVideo = true
+                    hasLockVideo = true
+                    previewTarget = VideoTarget.LOCK
                     refreshPreviewTrigger++
-                    Toast.makeText(context, "视频导入成功！", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "锁屏专属视频导入成功！", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(context, "视频导入失败，请重试", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "锁屏视频导入失败，请重试", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // Picker for Home Screen Video
+    val homeVideoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            isImportingTarget = VideoTarget.HOME
+            scope.launch {
+                val success = withContext(Dispatchers.IO) {
+                    config.saveVideoForTarget(uri, VideoTarget.HOME)
+                }
+                isImportingTarget = null
+                if (success) {
+                    hasHomeVideo = true
+                    previewTarget = VideoTarget.HOME
+                    refreshPreviewTrigger++
+                    Toast.makeText(context, "桌面主屏视频导入成功！", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "桌面视频导入失败，请重试", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -102,12 +130,12 @@ fun PixelWallpaperHomeScreen() {
                 title = {
                     Column {
                         Text(
-                            text = "Pixel 动态壁纸",
+                            text = "Pixel 动态壁纸 v1.1",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "专为 Pixel 10 优化的视频动态桌面与锁屏",
+                            text = "锁屏与桌面双视频智能引擎",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -128,7 +156,71 @@ fun PixelWallpaperHomeScreen() {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
 
-            // 1. Phone Frame Live Preview (20:9 Pixel aspect ratio)
+            // 1. Wallpaper Mode Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "壁纸运行模式",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = wallpaperMode == WallpaperMode.DUAL,
+                            onClick = {
+                                wallpaperMode = WallpaperMode.DUAL
+                                config.wallpaperMode = WallpaperMode.DUAL
+                                refreshPreviewTrigger++
+                            },
+                            label = { Text("独立双视频模式 (推荐)") },
+                            leadingIcon = if (wallpaperMode == WallpaperMode.DUAL) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = wallpaperMode == WallpaperMode.UNIFIED,
+                            onClick = {
+                                wallpaperMode = WallpaperMode.UNIFIED
+                                config.wallpaperMode = WallpaperMode.UNIFIED
+                                previewTarget = VideoTarget.HOME
+                                refreshPreviewTrigger++
+                            },
+                            label = { Text("单视频统一模式") },
+                            leadingIcon = if (wallpaperMode == WallpaperMode.UNIFIED) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Text(
+                        text = if (wallpaperMode == WallpaperMode.DUAL)
+                            "✨ 独立模式：锁屏未解锁时播放【锁屏视频】，指纹/面容解锁瞬间毫秒级自动切换为【桌面视频】！"
+                        else
+                            "统一模式：主屏幕和锁定屏幕共用同一个动态视频播放。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 2. Interactive Phone Frame Live Preview (20:9 Pixel aspect ratio)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -147,11 +239,44 @@ fun PixelWallpaperHomeScreen() {
                     Text(
                         text = "Pixel 10 效果实时预览",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(bottom = 12.dp)
+                        fontWeight = FontWeight.SemiBold
                     )
 
-                    // Mock phone screen box (20:9 ratio approx)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Switch preview between Lock Screen and Home Screen
+                    if (wallpaperMode == WallpaperMode.DUAL) {
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier
+                                .fillMaxWidth(0.9f)
+                                .padding(bottom = 12.dp)
+                        ) {
+                            SegmentedButton(
+                                selected = previewTarget == VideoTarget.LOCK,
+                                onClick = {
+                                    previewTarget = VideoTarget.LOCK
+                                    refreshPreviewTrigger++
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                icon = { Icon(Icons.Default.Lock, contentDescription = null) }
+                            ) {
+                                Text("锁屏效果")
+                            }
+                            SegmentedButton(
+                                selected = previewTarget == VideoTarget.HOME,
+                                onClick = {
+                                    previewTarget = VideoTarget.HOME
+                                    refreshPreviewTrigger++
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                icon = { Icon(Icons.Default.Home, contentDescription = null) }
+                            ) {
+                                Text("桌面效果")
+                            }
+                        }
+                    }
+
+                    // Mock phone screen box (20:9 ratio)
                     Box(
                         modifier = Modifier
                             .width(180.dp)
@@ -163,11 +288,12 @@ fun PixelWallpaperHomeScreen() {
                     ) {
                         VideoPreviewSurface(
                             config = config,
+                            target = if (wallpaperMode == WallpaperMode.DUAL) previewTarget else VideoTarget.HOME,
                             refreshKey = refreshPreviewTrigger,
                             scaleMode = scaleMode
                         )
 
-                        // Top camera punch-hole indicator
+                        // Top camera punch-hole
                         Box(
                             modifier = Modifier
                                 .padding(top = 10.dp)
@@ -176,81 +302,137 @@ fun PixelWallpaperHomeScreen() {
                                 .background(Color.Black.copy(alpha = 0.8f))
                                 .align(Alignment.TopCenter)
                         )
-                    }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = if (hasCustomVideo) "已载入自定义本地视频" else "正在播放内置示例片段",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
-            // 2. Video Select & Actions Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "视频来源",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Button(
-                        onClick = {
-                            videoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
-                        enabled = !isImporting
-                    ) {
-                        if (isImporting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("正在导入视频...")
+                        // Simulated Lock Screen / Home Screen Overlay
+                        if (wallpaperMode == WallpaperMode.DUAL && previewTarget == VideoTarget.LOCK) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 28.dp)
+                                    .align(Alignment.TopCenter),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "09:41",
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.Light,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "轻触锁屏体验",
+                                    fontSize = 9.sp,
+                                    color = Color.White.copy(alpha = 0.7f)
+                                )
+                            }
                         } else {
-                            Icon(Icons.Default.VideoLibrary, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("从手机相册选择任意视频")
+                            // Home Screen simulated dock
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
+                                    .align(Alignment.BottomCenter),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                repeat(4) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.5f))
+                                    )
+                                }
+                            }
                         }
                     }
 
-                    if (hasCustomVideo) {
-                        OutlinedButton(
-                            onClick = {
-                                File(context.filesDir, WallpaperConfig.VIDEO_FILENAME).delete()
-                                config.videoPath = null
-                                hasCustomVideo = false
-                                refreshPreviewTrigger++
-                                Toast.makeText(context, "已恢复内置示例视频", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Icon(Icons.Default.RestartAlt, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("恢复默认演示壁纸")
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val statusText = if (wallpaperMode == WallpaperMode.DUAL) {
+                        if (previewTarget == VideoTarget.LOCK) {
+                            if (hasLockVideo) "正在预览：自定义【锁屏专属视频】" else "锁屏预览：内置示例视频 (未设置自定义)"
+                        } else {
+                            if (hasHomeVideo) "正在预览：自定义【桌面主屏视频】" else "桌面预览：内置示例视频 (未设置自定义)"
                         }
+                    } else {
+                        if (hasHomeVideo) "正在预览：自定义统一壁纸" else "正在播放内置示例壁纸"
                     }
+
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
 
-            // 3. Scaling & Layout Mode Card
+            // 3. Video Select Cards
+            if (wallpaperMode == WallpaperMode.DUAL) {
+                // Lock screen video card
+                VideoTargetCard(
+                    title = "🔒 锁屏专属动态视频",
+                    subtitle = "手机点亮屏幕、等待指纹/面容解锁时播放",
+                    hasCustom = hasLockVideo,
+                    isImporting = isImportingTarget == VideoTarget.LOCK,
+                    onPick = {
+                        lockVideoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                        )
+                    },
+                    onReset = {
+                        config.clearVideo(VideoTarget.LOCK)
+                        hasLockVideo = false
+                        refreshPreviewTrigger++
+                        Toast.makeText(context, "已恢复锁屏默认示例", Toast.LENGTH_SHORT).show()
+                    }
+                )
+
+                // Home screen video card
+                VideoTargetCard(
+                    title = "🏠 桌面主屏动态视频",
+                    subtitle = "手机解锁进入桌面主屏幕后无缝播放",
+                    hasCustom = hasHomeVideo,
+                    isImporting = isImportingTarget == VideoTarget.HOME,
+                    onPick = {
+                        homeVideoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                        )
+                    },
+                    onReset = {
+                        config.clearVideo(VideoTarget.HOME)
+                        hasHomeVideo = false
+                        refreshPreviewTrigger++
+                        Toast.makeText(context, "已恢复桌面默认示例", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            } else {
+                // Unified single video card
+                VideoTargetCard(
+                    title = "🎬 统一动态视频",
+                    subtitle = "主屏幕与锁定屏幕同步播放同一段视频",
+                    hasCustom = hasHomeVideo,
+                    isImporting = isImportingTarget == VideoTarget.HOME,
+                    onPick = {
+                        homeVideoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                        )
+                    },
+                    onReset = {
+                        config.clearVideo(VideoTarget.HOME)
+                        hasHomeVideo = false
+                        refreshPreviewTrigger++
+                        Toast.makeText(context, "已恢复默认示例视频", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+
+            // 4. Scaling Mode Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp)
@@ -289,7 +471,7 @@ fun PixelWallpaperHomeScreen() {
                 }
             }
 
-            // 4. Audio & Double Tap Gestures Card
+            // 5. Audio & Double Tap Gestures Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp)
@@ -306,7 +488,6 @@ fun PixelWallpaperHomeScreen() {
                         fontWeight = FontWeight.Bold
                     )
 
-                    // Audio Mute Switch
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -335,7 +516,6 @@ fun PixelWallpaperHomeScreen() {
 
                     HorizontalDivider()
 
-                    // Double Tap Gesture
                     Text(
                         text = "桌面双击手势动作",
                         style = MaterialTheme.typography.bodyLarge,
@@ -371,7 +551,42 @@ fun PixelWallpaperHomeScreen() {
                 }
             }
 
-            // 5. Apply Wallpaper Big Button
+            // 6. Dual-Mode Key Setting Guidance Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "双视频生效必看指南",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Text(
+                            text = "点击下方按钮进入系统设置界面时，请务必选择「主屏幕和锁定屏幕」！系统会将本壁纸服务同时赋给两个屏幕，随后我们内置的智能锁屏引擎会自动在锁屏播锁屏视频、解锁后播桌面视频！",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                }
+            }
+
+            // 7. Apply Wallpaper Big Button
             Button(
                 onClick = { applyAsLiveWallpaper(context) },
                 modifier = Modifier
@@ -385,56 +600,98 @@ fun PixelWallpaperHomeScreen() {
                 Icon(Icons.Default.Wallpaper, contentDescription = null)
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "设为 Pixel 动态壁纸 (桌面 / 锁屏)",
+                    text = "设为 Pixel 动态壁纸 (选主屏幕和锁屏)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            // 6. Pixel 10 Tips Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Bolt,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Pixel 10 专项特性与省电说明",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
 
-                    TipItem(
-                        icon = Icons.Default.CheckCircle,
-                        text = "同时支持「主屏幕」与「主屏幕和锁定屏幕」两种动态显示模式。"
+@Composable
+fun VideoTargetCard(
+    title: String,
+    subtitle: String,
+    hasCustom: Boolean,
+    isImporting: Boolean,
+    onPick: () -> Unit,
+    onReset: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
-                    TipItem(
-                        icon = Icons.Default.BatteryChargingFull,
-                        text = "深度省电：当屏幕关闭或打开其他 App 时，后台视频解码立刻停止，待机功耗趋近于零。"
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    TipItem(
-                        icon = Icons.Default.AutoAwesome,
-                        text = "支持 4K/60fps、HDR、HEVC/H.265 及 AV1 格式，依托 Tensor 芯片硬件加速，流畅无发热。"
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (hasCustom) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Text(
+                        text = if (hasCustom) "已载入自定义" else "默认示例",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        color = if (hasCustom) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Button(
+                onClick = onPick,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                enabled = !isImporting
+            ) {
+                if (isImporting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("正在导入视频...")
+                } else {
+                    Icon(Icons.Default.VideoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (hasCustom) "更换该视频" else "从相册选择视频")
+                }
+            }
+
+            if (hasCustom) {
+                OutlinedButton(
+                    onClick = onReset,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("恢复默认示例", fontSize = 13.sp)
+                }
+            }
         }
     }
 }
@@ -446,6 +703,7 @@ class PreviewPlayerController(
     private var mediaPlayer: MediaPlayer? = null
     private var currentHolder: SurfaceHolder? = null
     var scaleMode: ScaleMode = ScaleMode.CENTER_CROP
+    var currentTarget: VideoTarget = VideoTarget.HOME
 
     fun setScale(mode: ScaleMode) {
         scaleMode = mode
@@ -463,7 +721,8 @@ class PreviewPlayerController(
         }
     }
 
-    fun reloadVideo() {
+    fun reloadVideo(target: VideoTarget) {
+        currentTarget = target
         val holder = currentHolder ?: return
         if (holder.surface == null || !holder.surface.isValid) return
 
@@ -482,8 +741,11 @@ class PreviewPlayerController(
                 isLooping = true
                 setVolume(0f, 0f)
 
-                if (config.hasCustomVideo()) {
-                    setDataSource(config.videoPath!!)
+                if (config.hasVideoForTarget(target)) {
+                    val path = config.getVideoPathForTarget(target)!!
+                    setDataSource(path)
+                } else if (config.hasHomeVideo()) {
+                    setDataSource(config.homeVideoPath!!)
                 } else {
                     val afd = context.resources.openRawResourceFd(R.raw.sample_wallpaper)
                     setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
@@ -509,7 +771,7 @@ class PreviewPlayerController(
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         currentHolder = holder
-        reloadVideo()
+        reloadVideo(currentTarget)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -537,20 +799,19 @@ class PreviewPlayerController(
 @Composable
 fun VideoPreviewSurface(
     config: WallpaperConfig,
+    target: VideoTarget,
     refreshKey: Int,
     scaleMode: ScaleMode
 ) {
     val context = LocalContext.current
     val controller = remember { PreviewPlayerController(context, config) }
 
-    // When scaleMode changes, update scaling in real-time
     LaunchedEffect(scaleMode) {
         controller.setScale(scaleMode)
     }
 
-    // When refreshKey changes (video chosen or reset), reload immediately!
-    LaunchedEffect(refreshKey) {
-        controller.reloadVideo()
+    LaunchedEffect(target, refreshKey) {
+        controller.reloadVideo(target)
     }
 
     DisposableEffect(Unit) {
@@ -627,29 +888,6 @@ fun DoubleTapOption(
             text = title,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-        )
-    }
-}
-
-@Composable
-fun TipItem(icon: ImageVector, text: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier
-                .size(18.dp)
-                .padding(top = 2.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer
         )
     }
 }
