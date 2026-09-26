@@ -360,7 +360,7 @@ class VideoLiveWallpaperService : WallpaperService() {
         private fun applyScalingMode() {
             mediaPlayer?.let { player ->
                 try {
-                    val mode = if (config.scaleMode == ScaleMode.CENTER_CROP) {
+                    val mode = if (config.scaleMode == ScaleMode.ASPECT_FILL) {
                         MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
                     } else {
                         MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT

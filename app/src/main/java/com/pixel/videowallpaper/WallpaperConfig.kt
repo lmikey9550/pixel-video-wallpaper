@@ -8,8 +8,18 @@ import java.io.File
 import java.io.FileOutputStream
 
 enum class ScaleMode(val title: String, val description: String) {
-    CENTER_CROP("满屏填充 (Center Crop)", "自动适配 Pixel 10 全屏，无黑边居中填充"),
-    FIT_CENTER("等比适应 (Fit Center)", "完整保留原视频画面比例，多余部分黑边填充")
+    ASPECT_FILL("等比例平铺 (铺满屏幕)", "等比例缩放直至铺满整块屏幕，保持原画面真实比例，绝不变形"),
+    ORIGINAL_FIT("原视频尺寸放置 (居中显示)", "完整保留原视频原始尺寸与比例居中放置，黑边衬底，绝不变形");
+
+    companion object {
+        fun fromString(name: String?): ScaleMode {
+            return when (name) {
+                "ASPECT_FILL", "CENTER_CROP" -> ASPECT_FILL
+                "ORIGINAL_FIT", "FIT_CENTER" -> ORIGINAL_FIT
+                else -> ASPECT_FILL
+            }
+        }
+    }
 }
 
 enum class DoubleTapAction(val title: String) {
@@ -76,12 +86,8 @@ class WallpaperConfig(private val context: Context) {
 
     var scaleMode: ScaleMode
         get() {
-            val name = prefs.getString(KEY_SCALE_MODE, ScaleMode.CENTER_CROP.name)
-            return try {
-                ScaleMode.valueOf(name ?: ScaleMode.CENTER_CROP.name)
-            } catch (e: Exception) {
-                ScaleMode.CENTER_CROP
-            }
+            val name = prefs.getString(KEY_SCALE_MODE, ScaleMode.ASPECT_FILL.name)
+            return ScaleMode.fromString(name)
         }
         set(value) {
             prefs.edit().putString(KEY_SCALE_MODE, value.name).apply()

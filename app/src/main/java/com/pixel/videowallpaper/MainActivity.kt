@@ -444,28 +444,28 @@ fun PixelWallpaperHomeScreen() {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "屏幕画面比例适配",
+                        text = "屏幕画面布放模式 (画面不变形)",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
                     ScaleModeOption(
-                        title = ScaleMode.CENTER_CROP.title,
-                        description = ScaleMode.CENTER_CROP.description,
-                        selected = scaleMode == ScaleMode.CENTER_CROP,
+                        title = ScaleMode.ASPECT_FILL.title,
+                        description = ScaleMode.ASPECT_FILL.description,
+                        selected = scaleMode == ScaleMode.ASPECT_FILL,
                         onSelect = {
-                            scaleMode = ScaleMode.CENTER_CROP
-                            config.scaleMode = ScaleMode.CENTER_CROP
+                            scaleMode = ScaleMode.ASPECT_FILL
+                            config.scaleMode = ScaleMode.ASPECT_FILL
                         }
                     )
 
                     ScaleModeOption(
-                        title = ScaleMode.FIT_CENTER.title,
-                        description = ScaleMode.FIT_CENTER.description,
-                        selected = scaleMode == ScaleMode.FIT_CENTER,
+                        title = ScaleMode.ORIGINAL_FIT.title,
+                        description = ScaleMode.ORIGINAL_FIT.description,
+                        selected = scaleMode == ScaleMode.ORIGINAL_FIT,
                         onSelect = {
-                            scaleMode = ScaleMode.FIT_CENTER
-                            config.scaleMode = ScaleMode.FIT_CENTER
+                            scaleMode = ScaleMode.ORIGINAL_FIT
+                            config.scaleMode = ScaleMode.ORIGINAL_FIT
                         }
                     )
                 }
@@ -702,14 +702,14 @@ class PreviewPlayerController(
 ) : SurfaceHolder.Callback {
     private var mediaPlayer: MediaPlayer? = null
     private var currentHolder: SurfaceHolder? = null
-    var scaleMode: ScaleMode = ScaleMode.CENTER_CROP
+    var scaleMode: ScaleMode = ScaleMode.ASPECT_FILL
     var currentTarget: VideoTarget = VideoTarget.HOME
 
     fun setScale(mode: ScaleMode) {
         scaleMode = mode
         mediaPlayer?.let { player ->
             try {
-                val m = if (mode == ScaleMode.CENTER_CROP) {
+                val m = if (mode == ScaleMode.ASPECT_FILL) {
                     MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
                 } else {
                     MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT
@@ -752,7 +752,7 @@ class PreviewPlayerController(
                     afd.close()
                 }
 
-                val m = if (scaleMode == ScaleMode.CENTER_CROP) {
+                val m = if (scaleMode == ScaleMode.ASPECT_FILL) {
                     MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
                 } else {
                     MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT
