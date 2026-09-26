@@ -8,6 +8,8 @@ import android.content.IntentFilter
 import android.content.res.AssetFileDescriptor
 import android.media.MediaPlayer
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -38,24 +40,45 @@ class VideoLiveWallpaperService : WallpaperService() {
         private var currentPlayingTarget: VideoTarget? = null
         private var gestureDetector: GestureDetector? = null
 
-        private var keyguardListener: KeyguardManager.KeyguardLockedStateListener? = null
+        private val lockCheckHandler = Handler(Looper.getMainLooper())
+        private val lockCheckRunnable = object : Runnable {
+            override fun run() {
+                if (isEngineVisible && isKeyguardLocked) {
+                    val currentlyLocked = keyguardManager.isKeyguardLocked
+                    if (!currentlyLocked) {
+                        Log.d(TAG, "Lock polling detected device unlock!")
+                        onKeyguardStateChanged(false)
+                    } else {
+                        lockCheckHandler.postDelayed(this, 180)
+                    }
+                }
+            }
+        }
 
         private val systemEventReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_USER_PRESENT -> {
-                        Log.d(TAG, "Device unlocked (ACTION_USER_PRESENT)")
+                        Log.d(TAG, "Device unlocked broadcast (ACTION_USER_PRESENT)")
                         onKeyguardStateChanged(false)
                     }
                     Intent.ACTION_SCREEN_OFF -> {
-                        Log.d(TAG, "Screen off (ACTION_SCREEN_OFF) -> reset to lock screen state")
+                        Log.d(TAG, "Screen off broadcast (ACTION_SCREEN_OFF) -> reset to locked state")
                         onKeyguardStateChanged(true)
                     }
-                    WallpaperConfig.ACTION_CONFIG_CHANGED -> {
-                        Log.d(TAG, "Configuration changed broadcast received")
-                        reloadCurrentConfig()
+                    Intent.ACTION_SCREEN_ON -> {
+                        Log.d(TAG, "Screen on broadcast (ACTION_SCREEN_ON)")
+                        val locked = keyguardManager.isKeyguardLocked
+                        onKeyguardStateChanged(locked)
                     }
                 }
+            }
+        }
+
+        private val configReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                Log.d(TAG, "Configuration changed broadcast received")
+                reloadCurrentConfig()
             }
         }
 
@@ -75,32 +98,20 @@ class VideoLiveWallpaperService : WallpaperService() {
                 }
             })
 
-            // Register keyguard locked state listener on Android 13+ (Pixel 10) if permitted
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                try {
-                    keyguardListener = KeyguardManager.KeyguardLockedStateListener { locked ->
-                        Log.d(TAG, "KeyguardLockedStateListener: locked=$locked")
-                        onKeyguardStateChanged(locked)
-                    }
-                    keyguardListener?.let { listener ->
-                        keyguardManager.addKeyguardLockedStateListener(mainExecutor, listener)
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "KeyguardLockedStateListener not available: ${e.message}")
-                    keyguardListener = null
-                }
-            }
-
-            // Register broadcast receiver for lock/unlock and config changes
-            val filter = IntentFilter().apply {
+            // Register system broadcast receiver (Must use RECEIVER_EXPORTED for system broadcasts on Android 14+)
+            val systemFilter = IntentFilter().apply {
                 addAction(Intent.ACTION_USER_PRESENT)
                 addAction(Intent.ACTION_SCREEN_OFF)
-                addAction(WallpaperConfig.ACTION_CONFIG_CHANGED)
+                addAction(Intent.ACTION_SCREEN_ON)
             }
+            val appFilter = IntentFilter(WallpaperConfig.ACTION_CONFIG_CHANGED)
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(systemEventReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                registerReceiver(systemEventReceiver, systemFilter, Context.RECEIVER_EXPORTED)
+                registerReceiver(configReceiver, appFilter, Context.RECEIVER_NOT_EXPORTED)
             } else {
-                registerReceiver(systemEventReceiver, filter)
+                registerReceiver(systemEventReceiver, systemFilter)
+                registerReceiver(configReceiver, appFilter)
             }
         }
 
@@ -118,6 +129,7 @@ class VideoLiveWallpaperService : WallpaperService() {
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
             super.onSurfaceDestroyed(holder)
+            stopLockPolling()
             releasePlayer()
         }
 
@@ -126,11 +138,7 @@ class VideoLiveWallpaperService : WallpaperService() {
             isEngineVisible = visible
 
             if (visible) {
-                // Check if keyguard state changed while not visible
-                val currentLocked = keyguardManager.isKeyguardLocked
-                if (currentLocked != isKeyguardLocked) {
-                    isKeyguardLocked = currentLocked
-                }
+                isKeyguardLocked = keyguardManager.isKeyguardLocked
                 val desiredTarget = resolveDesiredTarget()
                 if (desiredTarget != currentPlayingTarget) {
                     switchVideoTarget(desiredTarget)
@@ -145,7 +153,13 @@ class VideoLiveWallpaperService : WallpaperService() {
                         }
                     }
                 }
+                if (isKeyguardLocked) {
+                    startLockPollingIfNeeded()
+                } else {
+                    stopLockPolling()
+                }
             } else {
+                stopLockPolling()
                 mediaPlayer?.let { player ->
                     try {
                         if (player.isPlaying) {
@@ -158,28 +172,20 @@ class VideoLiveWallpaperService : WallpaperService() {
             }
         }
 
-        override fun onTouchEvent(event: MotionEvent) {
-            super.onTouchEvent(event)
-            gestureDetector?.onTouchEvent(event)
-        }
-
-        override fun onDestroy() {
-            super.onDestroy()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                keyguardListener?.let { listener ->
-                    try {
-                        keyguardManager.removeKeyguardLockedStateListener(listener)
-                    } catch (e: Exception) {
-                        // Ignore
-                    }
-                }
+        override fun onOffsetsChanged(
+            xOffset: Float,
+            yOffset: Float,
+            xOffsetStep: Float,
+            yOffsetStep: Float,
+            xPixelOffset: Int,
+            yPixelOffset: Int
+        ) {
+            super.onOffsetsChanged(xOffset, yOffset, xOffsetStep, yOffsetStep, xPixelOffset, yPixelOffset)
+            // When home launcher scrolls or receives focus, check if unlocked
+            if (isKeyguardLocked && !keyguardManager.isKeyguardLocked) {
+                Log.d(TAG, "onOffsetsChanged detected keyguard unlock!")
+                onKeyguardStateChanged(false)
             }
-            try {
-                unregisterReceiver(systemEventReceiver)
-            } catch (e: Exception) {
-                // Ignore
-            }
-            releasePlayer()
         }
 
         override fun onWallpaperFlagsChanged(which: Int) {
@@ -188,6 +194,34 @@ class VideoLiveWallpaperService : WallpaperService() {
             if (desiredTarget != currentPlayingTarget) {
                 switchVideoTarget(desiredTarget)
             }
+        }
+
+        override fun onTouchEvent(event: MotionEvent) {
+            super.onTouchEvent(event)
+            gestureDetector?.onTouchEvent(event)
+        }
+
+        override fun onDestroy() {
+            super.onDestroy()
+            stopLockPolling()
+            try {
+                unregisterReceiver(systemEventReceiver)
+                unregisterReceiver(configReceiver)
+            } catch (e: Exception) {
+                // Ignore
+            }
+            releasePlayer()
+        }
+
+        private fun startLockPollingIfNeeded() {
+            stopLockPolling()
+            if (isEngineVisible && isKeyguardLocked && config.wallpaperMode == WallpaperMode.DUAL) {
+                lockCheckHandler.postDelayed(lockCheckRunnable, 180)
+            }
+        }
+
+        private fun stopLockPolling() {
+            lockCheckHandler.removeCallbacks(lockCheckRunnable)
         }
 
         private fun resolveDesiredTarget(): VideoTarget {
@@ -216,13 +250,17 @@ class VideoLiveWallpaperService : WallpaperService() {
 
         private fun onKeyguardStateChanged(locked: Boolean) {
             isKeyguardLocked = locked
+            if (!locked) {
+                stopLockPolling()
+            } else {
+                startLockPollingIfNeeded()
+            }
             val desiredTarget = resolveDesiredTarget()
             if (desiredTarget != currentPlayingTarget) {
                 Log.d(TAG, "Switching video from $currentPlayingTarget to $desiredTarget (isLocked=$locked)")
                 if (isEngineVisible) {
                     switchVideoTarget(desiredTarget)
                 } else {
-                    // Update target so it starts with correct video when made visible
                     currentPlayingTarget = null
                 }
             }
@@ -243,7 +281,6 @@ class VideoLiveWallpaperService : WallpaperService() {
                     val volume = if (config.isMuted) 0f else 1f
                     setVolume(volume, volume)
 
-                    // Bind video data source
                     bindDataSource(this, target)
 
                     setOnPreparedListener { mp ->
