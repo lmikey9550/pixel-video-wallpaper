@@ -187,7 +187,7 @@ fun PixelWallpaperHomeScreen() {
                                 config.wallpaperMode = WallpaperMode.DUAL
                                 refreshPreviewTrigger++
                             },
-                            label = { Text("独立双视频模式 (推荐)") },
+                            label = { Text("独立双视频模式") },
                             leadingIcon = if (wallpaperMode == WallpaperMode.DUAL) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                             } else null,
@@ -495,7 +495,7 @@ fun PixelWallpaperHomeScreen() {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "静音播放 (推荐)",
+                                text = "静音播放",
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.SemiBold
                             )

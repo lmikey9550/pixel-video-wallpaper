@@ -8,7 +8,7 @@ import java.io.File
 import java.io.FileOutputStream
 
 enum class ScaleMode(val title: String, val description: String) {
-    CENTER_CROP("满屏填充 (Center Crop)", "自动适配 Pixel 10 全屏，无黑边居中填充 (推荐)"),
+    CENTER_CROP("满屏填充 (Center Crop)", "自动适配 Pixel 10 全屏，无黑边居中填充"),
     FIT_CENTER("等比适应 (Fit Center)", "完整保留原视频画面比例，多余部分黑边填充")
 }
 
@@ -19,7 +19,7 @@ enum class DoubleTapAction(val title: String) {
 }
 
 enum class WallpaperMode(val title: String, val description: String) {
-    DUAL("独立双视频模式", "分别设置锁屏与桌面视频，解锁时智能无缝切换 (推荐)"),
+    DUAL("独立双视频模式", "分别设置锁屏与桌面视频，解锁时智能无缝切换"),
     UNIFIED("单视频统一模式", "锁屏与主屏使用同一个动态视频")
 }
 
