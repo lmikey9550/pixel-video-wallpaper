@@ -75,14 +75,19 @@ class VideoLiveWallpaperService : WallpaperService() {
                 }
             })
 
-            // Register keyguard locked state listener on Android 13+ (Pixel 10)
+            // Register keyguard locked state listener on Android 13+ (Pixel 10) if permitted
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                keyguardListener = KeyguardManager.KeyguardLockedStateListener { locked ->
-                    Log.d(TAG, "KeyguardLockedStateListener: locked=$locked")
-                    onKeyguardStateChanged(locked)
-                }
-                keyguardListener?.let { listener ->
-                    keyguardManager.addKeyguardLockedStateListener(mainExecutor, listener)
+                try {
+                    keyguardListener = KeyguardManager.KeyguardLockedStateListener { locked ->
+                        Log.d(TAG, "KeyguardLockedStateListener: locked=$locked")
+                        onKeyguardStateChanged(locked)
+                    }
+                    keyguardListener?.let { listener ->
+                        keyguardManager.addKeyguardLockedStateListener(mainExecutor, listener)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "KeyguardLockedStateListener not available: ${e.message}")
+                    keyguardListener = null
                 }
             }
 
@@ -177,9 +182,30 @@ class VideoLiveWallpaperService : WallpaperService() {
             releasePlayer()
         }
 
+        override fun onWallpaperFlagsChanged(which: Int) {
+            super.onWallpaperFlagsChanged(which)
+            val desiredTarget = resolveDesiredTarget()
+            if (desiredTarget != currentPlayingTarget) {
+                switchVideoTarget(desiredTarget)
+            }
+        }
+
         private fun resolveDesiredTarget(): VideoTarget {
             if (config.wallpaperMode == WallpaperMode.UNIFIED) {
                 return VideoTarget.HOME
+            }
+            // Check Android 14+ engine wallpaper flags if decoupled
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                try {
+                    val flags = wallpaperFlags
+                    if ((flags and android.app.WallpaperManager.FLAG_LOCK) != 0 && (flags and android.app.WallpaperManager.FLAG_SYSTEM) == 0) {
+                        return if (config.hasLockVideo()) VideoTarget.LOCK else VideoTarget.HOME
+                    } else if ((flags and android.app.WallpaperManager.FLAG_SYSTEM) != 0 && (flags and android.app.WallpaperManager.FLAG_LOCK) == 0) {
+                        return VideoTarget.HOME
+                    }
+                } catch (e: Exception) {
+                    // Ignore
+                }
             }
             return if (isKeyguardLocked) {
                 if (config.hasLockVideo()) VideoTarget.LOCK else VideoTarget.HOME
