@@ -450,22 +450,22 @@ fun PixelWallpaperHomeScreen() {
                     )
 
                     ScaleModeOption(
-                        title = ScaleMode.ASPECT_FILL.title,
-                        description = ScaleMode.ASPECT_FILL.description,
-                        selected = scaleMode == ScaleMode.ASPECT_FILL,
+                        title = ScaleMode.ASPECT_FIT.title,
+                        description = ScaleMode.ASPECT_FIT.description,
+                        selected = scaleMode == ScaleMode.ASPECT_FIT,
                         onSelect = {
-                            scaleMode = ScaleMode.ASPECT_FILL
-                            config.scaleMode = ScaleMode.ASPECT_FILL
+                            scaleMode = ScaleMode.ASPECT_FIT
+                            config.scaleMode = ScaleMode.ASPECT_FIT
                         }
                     )
 
                     ScaleModeOption(
-                        title = ScaleMode.ORIGINAL_FIT.title,
-                        description = ScaleMode.ORIGINAL_FIT.description,
-                        selected = scaleMode == ScaleMode.ORIGINAL_FIT,
+                        title = ScaleMode.ORIGINAL_SIZE.title,
+                        description = ScaleMode.ORIGINAL_SIZE.description,
+                        selected = scaleMode == ScaleMode.ORIGINAL_SIZE,
                         onSelect = {
-                            scaleMode = ScaleMode.ORIGINAL_FIT
-                            config.scaleMode = ScaleMode.ORIGINAL_FIT
+                            scaleMode = ScaleMode.ORIGINAL_SIZE
+                            config.scaleMode = ScaleMode.ORIGINAL_SIZE
                         }
                     )
                 }
@@ -702,29 +702,21 @@ class PreviewPlayerController(
 ) : SurfaceHolder.Callback {
     private var mediaPlayer: MediaPlayer? = null
     private var currentHolder: SurfaceHolder? = null
-    var scaleMode: ScaleMode = ScaleMode.ASPECT_FILL
+    private var glRenderer: GLVideoRenderer? = null
+    var scaleMode: ScaleMode = config.scaleMode
     var currentTarget: VideoTarget = VideoTarget.HOME
 
     fun setScale(mode: ScaleMode) {
         scaleMode = mode
-        mediaPlayer?.let { player ->
-            try {
-                val m = if (mode == ScaleMode.ASPECT_FILL) {
-                    MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
-                } else {
-                    MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT
-                }
-                player.setVideoScalingMode(m)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        glRenderer?.let { renderer ->
+            renderer.scaleMode = mode
+            renderer.renderFrame()
         }
     }
 
     fun reloadVideo(target: VideoTarget) {
         currentTarget = target
-        val holder = currentHolder ?: return
-        if (holder.surface == null || !holder.surface.isValid) return
+        val renderer = glRenderer ?: return
 
         try {
             mediaPlayer?.let { player ->
@@ -737,7 +729,7 @@ class PreviewPlayerController(
             }
 
             mediaPlayer?.apply {
-                setSurface(holder.surface)
+                setSurface(renderer.inputSurface)
                 isLooping = true
                 setVolume(0f, 0f)
 
@@ -752,14 +744,19 @@ class PreviewPlayerController(
                     afd.close()
                 }
 
-                val m = if (scaleMode == ScaleMode.ASPECT_FILL) {
-                    MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
-                } else {
-                    MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT
+                setOnVideoSizeChangedListener { _, vWidth, vHeight ->
+                    if (vWidth > 0 && vHeight > 0) {
+                        renderer.videoWidth = vWidth
+                        renderer.videoHeight = vHeight
+                        renderer.renderFrame()
+                    }
                 }
-                setVideoScalingMode(m)
 
                 setOnPreparedListener { mp ->
+                    if (mp.videoWidth > 0 && mp.videoHeight > 0) {
+                        renderer.videoWidth = mp.videoWidth
+                        renderer.videoHeight = mp.videoHeight
+                    }
                     mp.start()
                 }
                 prepareAsync()
@@ -771,16 +768,22 @@ class PreviewPlayerController(
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         currentHolder = holder
-        reloadVideo(currentTarget)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         currentHolder = holder
-        setScale(scaleMode)
+        glRenderer?.release()
+        val renderer = GLVideoRenderer(holder.surface, width, height).apply {
+            this.scaleMode = this@PreviewPlayerController.scaleMode
+        }
+        glRenderer = renderer
+        reloadVideo(currentTarget)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         currentHolder = null
+        glRenderer?.release()
+        glRenderer = null
         try {
             mediaPlayer?.stop()
             mediaPlayer?.reset()
@@ -792,7 +795,16 @@ class PreviewPlayerController(
     }
 
     fun release() {
-        surfaceDestroyed(currentHolder ?: return)
+        glRenderer?.release()
+        glRenderer = null
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.reset()
+            mediaPlayer?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        mediaPlayer = null
     }
 }
 

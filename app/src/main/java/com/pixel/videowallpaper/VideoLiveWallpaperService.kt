@@ -39,6 +39,9 @@ class VideoLiveWallpaperService : WallpaperService() {
         private var isKeyguardLocked = true
         private var currentPlayingTarget: VideoTarget? = null
         private var gestureDetector: GestureDetector? = null
+        private var glRenderer: GLVideoRenderer? = null
+        private var surfaceWidth: Int = 1080
+        private var surfaceHeight: Int = 2404
 
         private val lockCheckHandler = Handler(Looper.getMainLooper())
         private val lockCheckRunnable = object : Runnable {
@@ -124,7 +127,20 @@ class VideoLiveWallpaperService : WallpaperService() {
 
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
             super.onSurfaceChanged(holder, format, width, height)
-            applyScalingMode()
+            surfaceWidth = width
+            surfaceHeight = height
+            glRenderer?.let { oldRenderer ->
+                oldRenderer.release()
+                val newRenderer = GLVideoRenderer(holder.surface, width, height).apply {
+                    scaleMode = config.scaleMode
+                    mediaPlayer?.let { mp ->
+                        videoWidth = mp.videoWidth
+                        videoHeight = mp.videoHeight
+                        mp.setSurface(inputSurface)
+                    }
+                }
+                glRenderer = newRenderer
+            } ?: applyScalingMode()
         }
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
@@ -273,9 +289,17 @@ class VideoLiveWallpaperService : WallpaperService() {
             }
             releasePlayer()
             currentPlayingTarget = target
+
+            val width = if (surfaceWidth > 0) surfaceWidth else 1080
+            val height = if (surfaceHeight > 0) surfaceHeight else 2404
+            val renderer = GLVideoRenderer(holder.surface, width, height).apply {
+                scaleMode = config.scaleMode
+            }
+            glRenderer = renderer
+
             try {
                 mediaPlayer = MediaPlayer().apply {
-                    setSurface(holder.surface)
+                    setSurface(renderer.inputSurface)
                     isLooping = true
 
                     val volume = if (config.isMuted) 0f else 1f
@@ -283,9 +307,20 @@ class VideoLiveWallpaperService : WallpaperService() {
 
                     bindDataSource(this, target)
 
+                    setOnVideoSizeChangedListener { _, vWidth, vHeight ->
+                        if (vWidth > 0 && vHeight > 0) {
+                            renderer.videoWidth = vWidth
+                            renderer.videoHeight = vHeight
+                            renderer.renderFrame()
+                        }
+                    }
+
                     setOnPreparedListener { mp ->
                         isPrepared = true
-                        applyScalingMode()
+                        if (mp.videoWidth > 0 && mp.videoHeight > 0) {
+                            renderer.videoWidth = mp.videoWidth
+                            renderer.videoHeight = mp.videoHeight
+                        }
                         if (isEngineVisible) {
                             mp.start()
                         }
@@ -322,22 +357,38 @@ class VideoLiveWallpaperService : WallpaperService() {
             if (holder.surface == null || !holder.surface.isValid) return
 
             currentPlayingTarget = target
+            val renderer = glRenderer ?: run {
+                initAndStartPlayer(holder, target)
+                return
+            }
+
             mediaPlayer?.let { player ->
                 try {
                     if (player.isPlaying) {
                         player.stop()
                     }
                     player.reset()
-                    player.setSurface(holder.surface)
+                    player.setSurface(renderer.inputSurface)
                     player.isLooping = true
                     val volume = if (config.isMuted) 0f else 1f
                     player.setVolume(volume, volume)
 
                     bindDataSource(player, target)
 
+                    player.setOnVideoSizeChangedListener { _, vWidth, vHeight ->
+                        if (vWidth > 0 && vHeight > 0) {
+                            renderer.videoWidth = vWidth
+                            renderer.videoHeight = vHeight
+                            renderer.renderFrame()
+                        }
+                    }
+
                     player.setOnPreparedListener { mp ->
                         isPrepared = true
-                        applyScalingMode()
+                        if (mp.videoWidth > 0 && mp.videoHeight > 0) {
+                            renderer.videoWidth = mp.videoWidth
+                            renderer.videoHeight = mp.videoHeight
+                        }
                         if (isEngineVisible) {
                             mp.start()
                         }
@@ -358,17 +409,9 @@ class VideoLiveWallpaperService : WallpaperService() {
         }
 
         private fun applyScalingMode() {
-            mediaPlayer?.let { player ->
-                try {
-                    val mode = if (config.scaleMode == ScaleMode.ASPECT_FILL) {
-                        MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
-                    } else {
-                        MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT
-                    }
-                    player.setVideoScalingMode(mode)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to set scaling mode: ${e.message}")
-                }
+            glRenderer?.let { renderer ->
+                renderer.scaleMode = config.scaleMode
+                renderer.renderFrame()
             }
         }
 
@@ -435,6 +478,8 @@ class VideoLiveWallpaperService : WallpaperService() {
                 }
             }
             mediaPlayer = null
+            glRenderer?.release()
+            glRenderer = null
         }
     }
 }
